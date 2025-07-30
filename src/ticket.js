@@ -182,7 +182,7 @@ client.on('interactionCreate', async interaction => {
 
     const invInput = new TextInputBuilder()
       .setCustomId('inviteCode')
-      .setLabel('What invite code are you using?')
+      .setLabel('How many invites do you have?')
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
