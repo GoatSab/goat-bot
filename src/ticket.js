@@ -63,7 +63,7 @@ fs.readdirSync(__dirname + '/commands')
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  // middleman embed
+  // post middleman embed if missing
   const ticketChannel = await client.channels.fetch(TICKET_CHANNEL_ID);
   if (ticketChannel?.isTextBased()) {
     const msgs = await ticketChannel.messages.fetch({ limit: 100 });
@@ -91,7 +91,7 @@ client.once('ready', async () => {
     }
   }
 
-  // invite rewards embed
+  // post invite rewards embed if missing
   const inviteChannel = await client.channels.fetch(INVITE_CHANNEL_ID);
   if (inviteChannel?.isTextBased()) {
     const msgs = await inviteChannel.messages.fetch({ limit: 100 });
@@ -133,7 +133,7 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // middleman modal
+  // open middleman modal
   if (interaction.isButton() && interaction.customId === 'open_ticket') {
     const modal = new ModalBuilder()
       .setCustomId('ticket_modal')
@@ -174,7 +174,7 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // invite modal
+  // open invite modal
   if (interaction.isButton() && interaction.customId === 'open_invite_ticket') {
     const modal = new ModalBuilder()
       .setCustomId('invite_modal')
@@ -182,7 +182,7 @@ client.on('interactionCreate', async interaction => {
 
     const invInput = new TextInputBuilder()
       .setCustomId('inviteCode')
-      .setLabel('How many invites do you have?')
+      .setLabel('What invite code are you using?')
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
@@ -191,7 +191,7 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // handle middleman submit
+  // handle middleman modal submit
   if (interaction.isModalSubmit() && interaction.customId === 'ticket_modal') {
     await interaction.deferReply({ ephemeral: true });
     const user = interaction.user;
@@ -246,7 +246,7 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // handle invite submit
+  // handle invite modal submit
   if (interaction.isModalSubmit() && interaction.customId === 'invite_modal') {
     await interaction.deferReply({ ephemeral: true });
     const user = interaction.user;
@@ -257,7 +257,7 @@ client.on('interactionCreate', async interaction => {
       inviteChan = await interaction.guild.channels.create({
         name: `invite-${user.username}`.toLowerCase(),
         type: 0,
-        parent: TICKET_CATEGORY_ID,
+        parent: INVITE_CATEGORY_ID,
         permissionOverwrites: [
           { id: interaction.guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
           { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
@@ -275,9 +275,16 @@ client.on('interactionCreate', async interaction => {
       .setColor('#57F287')
       .setTimestamp();
 
+    const closeBtnInvite = new ButtonBuilder()
+      .setCustomId('close_ticket')
+      .setLabel('Close Ticket')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔒');
+
     await inviteChan.send({
       content: `<@${user.id}> opened an invite ticket`,
-      embeds: [invEmbed]
+      embeds: [invEmbed],
+      components: [new ActionRowBuilder().addComponents(closeBtnInvite)]
     });
     await interaction.followUp({ content: `✅ Your invite ticket: ${inviteChan}`, ephemeral: true });
     return;
