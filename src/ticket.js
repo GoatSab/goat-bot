@@ -18,8 +18,10 @@ const {
 
 const TICKET_CHANNEL_ID      = '1399127054246477824';
 const TICKET_CATEGORY_ID     = '1399872666843873280';
+const INVITE_CHANNEL_ID      = '1398372783246934036';
 const STAFF_ROLE_ID          = '1399128110774878319';
-const TRANSCRIPT_CHANNEL_ID  = '1399878825235447848'; // set your log channel ID here
+const TRANSCRIPT_CHANNEL_ID  = '1399878825235447848';
+const FORUM_CHANNEL_ID       = '1399843405328027879';
 
 const client = new Client({
   intents: [
@@ -30,33 +32,26 @@ const client = new Client({
   ]
 });
 
-// right after your client is created and before you load commands:
-const FORUM_CHANNEL_ID = '1399843405328027879'; // your trade‐forum channel ID
-
 client.on('threadCreate', async thread => {
-  // only watch threads in your trade forum
   if (thread.parentId !== FORUM_CHANNEL_ID) return;
 
-  // count active threads that this user owns in that forum
   const allThreads = thread.guild.channels.cache.filter(c =>
     c.parentId === FORUM_CHANNEL_ID && c.isThread()
   );
   const userThreads = allThreads.filter(t => t.ownerId === thread.ownerId);
 
-  // if they already had one, delete the new one and DM them
   if (userThreads.size > 1) {
     await thread.delete().catch(() => null);
     const member = await thread.guild.members.fetch(thread.ownerId).catch(() => null);
     if (member) {
       member.send(
-        '🚫 You may only have one active trade post at a time.  ' +
+        '🚫 You may only have one active trade post at a time. ' +
         'Please delete your existing thread before creating a new one.'
       ).catch(() => null);
     }
   }
 });
 
-// load other slash commands (vouch, vouches, clearvouches, invites)
 client.commands = new Collection();
 fs.readdirSync(__dirname + '/commands')
   .filter(f => f.endsWith('.js'))
@@ -67,28 +62,62 @@ fs.readdirSync(__dirname + '/commands')
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
-  const channel = await client.channels.fetch(TICKET_CHANNEL_ID);
-  if (!channel?.isTextBased()) return;
-  
-  const embed = new EmbedBuilder()
-    .setTitle('Request a Middleman')
-    .setDescription('Tired of getting scammed? Keep every trade **SAFE** — request a Middleman!')
-    .addFields({ name: '❓ What’s a middleman?', value: 'A trusted staff member who holds both items until trade completes.' })
-    .setColor('#5865F2')
-    .setFooter({ text: 'TicketTool.xyz – Ticketing without clutter' });
 
-  const button = new ButtonBuilder()
-    .setCustomId('open_ticket')
-    .setLabel('Request a Middleman')
-    .setStyle(ButtonStyle.Primary)
-    .setEmoji('🛡️');
+  // middleman embed
+  const ticketChannel = await client.channels.fetch(TICKET_CHANNEL_ID);
+  if (ticketChannel?.isTextBased()) {
+    const msgs = await ticketChannel.messages.fetch({ limit: 100 });
+    const hasMiddleman = msgs.some(msg => {
+      const emb = msg.embeds[0];
+      const btn = msg.components.find(r => r.components.find(c => c.customId === 'open_ticket'));
+      return emb?.title === 'Request a Middleman' && btn;
+    });
+    if (!hasMiddleman) {
+      const embed = new EmbedBuilder()
+        .setTitle('Request a Middleman')
+        .setDescription('Tired of getting scammed? Keep every trade **SAFE** - request a Middleman!')
+        .addFields({ name: '❓ What\'s a middleman?', value: 'A trusted staff member who holds both items until trade completes.' })
+        .setColor('#5865F2')
+        .setFooter({ text: 'TicketTool.xyz - Ticketing without clutter' });
 
-  const row = new ActionRowBuilder().addComponents(button);
-  await channel.send({ embeds: [embed], components: [row] });
+      const button = new ButtonBuilder()
+        .setCustomId('open_ticket')
+        .setLabel('Request a Middleman')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('🛡️');
+
+      const row = new ActionRowBuilder().addComponents(button);
+      await ticketChannel.send({ embeds: [embed], components: [row] });
+    }
+  }
+
+  // invite rewards embed
+  const inviteChannel = await client.channels.fetch(INVITE_CHANNEL_ID);
+  if (inviteChannel?.isTextBased()) {
+    const msgs = await inviteChannel.messages.fetch({ limit: 100 });
+    const hasInvite = msgs.some(msg => {
+      const emb = msg.embeds[0];
+      const btn = msg.components.find(r => r.components.find(c => c.customId === 'open_invite_ticket'));
+      return emb?.title === 'Invite Rewards Ticket' && btn;
+    });
+    if (!hasInvite) {
+      const ivEmbed = new EmbedBuilder()
+        .setTitle('Invite Rewards Ticket')
+        .setDescription('Have enough invites for invite rewards? Create a ticket here to recieve your free brainrot.')
+        .setColor('#57F287');
+
+      const ivButton = new ButtonBuilder()
+        .setCustomId('open_invite_ticket')
+        .setLabel('Create Invite Ticket')
+        .setStyle(ButtonStyle.Success);
+
+      const ivRow = new ActionRowBuilder().addComponents(ivButton);
+      await inviteChannel.send({ embeds: [ivEmbed], components: [ivRow] });
+    }
+  }
 });
 
 client.on('interactionCreate', async interaction => {
-  // handle vouch- and invite-related slash commands
   if (interaction.isChatInputCommand()) {
     const cmd = client.commands.get(interaction.commandName);
     if (cmd) {
@@ -104,7 +133,7 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // open ticket modal
+  // middleman modal
   if (interaction.isButton() && interaction.customId === 'open_ticket') {
     const modal = new ModalBuilder()
       .setCustomId('ticket_modal')
@@ -145,7 +174,24 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // create ticket channel on modal submit
+  // invite modal
+  if (interaction.isButton() && interaction.customId === 'open_invite_ticket') {
+    const modal = new ModalBuilder()
+      .setCustomId('invite_modal')
+      .setTitle('Invite Tracker');
+
+    const invInput = new TextInputBuilder()
+      .setCustomId('inviteCode')
+      .setLabel('What invite code are you using?')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    modal.addComponents(new ActionRowBuilder().addComponents(invInput));
+    await interaction.showModal(modal);
+    return;
+  }
+
+  // handle middleman submit
   if (interaction.isModalSubmit() && interaction.customId === 'ticket_modal') {
     await interaction.deferReply({ ephemeral: true });
     const user = interaction.user;
@@ -185,7 +231,7 @@ client.on('interactionCreate', async interaction => {
       )
       .setTimestamp();
 
-    const closeButton = new ButtonBuilder()
+    const closeBtn = new ButtonBuilder()
       .setCustomId('close_ticket')
       .setLabel('Close Ticket')
       .setStyle(ButtonStyle.Danger)
@@ -194,13 +240,50 @@ client.on('interactionCreate', async interaction => {
     await ticketChannel.send({
       content: `<@${user.id}> opened a ticket`,
       embeds: [ticketEmbed],
-      components: [new ActionRowBuilder().addComponents(closeButton)]
+      components: [new ActionRowBuilder().addComponents(closeBtn)]
     });
     await interaction.followUp({ content: `✅ Your ticket has been created: ${ticketChannel}`, ephemeral: true });
     return;
   }
 
-  // close ticket + post transcript
+  // handle invite submit
+  if (interaction.isModalSubmit() && interaction.customId === 'invite_modal') {
+    await interaction.deferReply({ ephemeral: true });
+    const user = interaction.user;
+    const code = interaction.fields.getTextInputValue('inviteCode');
+
+    let inviteChan;
+    try {
+      inviteChan = await interaction.guild.channels.create({
+        name: `invite-${user.username}`.toLowerCase(),
+        type: 0,
+        parent: TICKET_CATEGORY_ID,
+        permissionOverwrites: [
+          { id: interaction.guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+          { id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
+        ]
+      });
+    } catch (err) {
+      console.error('Error creating invite ticket channel:', err);
+      return interaction.followUp({ content: '❌ Failed to create invite ticket channel.', ephemeral: true });
+    }
+
+    const invEmbed = new EmbedBuilder()
+      .setTitle(`Invite Ticket for ${user.tag}`)
+      .addFields({ name: 'Invite Code', value: code })
+      .setColor('#57F287')
+      .setTimestamp();
+
+    await inviteChan.send({
+      content: `<@${user.id}> opened an invite ticket`,
+      embeds: [invEmbed]
+    });
+    await interaction.followUp({ content: `✅ Your invite ticket: ${inviteChan}`, ephemeral: true });
+    return;
+  }
+
+  // close ticket + transcript
   if (interaction.isButton() && interaction.customId === 'close_ticket') {
     const channel = interaction.channel;
     const messages = await channel.messages.fetch({ limit: 100 });
