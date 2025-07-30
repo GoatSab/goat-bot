@@ -313,8 +313,8 @@ client.on('interactionCreate', async interaction => {
 
 client.login(process.env.DISCORD_TOKEN);
 
-const express = require('express');
-const app = express();
-app.get('/', (req, res) => res.send('OK'));
-app.listen(process.env.PORT || 3000);
-
+const http = require('http');
+const port = process.env.PORT || 3000;
+http
+  .createServer((req, res) => res.end('OK'))
+  .listen(port, () => console.log(`keep-alive ping listening on ${port}`));
