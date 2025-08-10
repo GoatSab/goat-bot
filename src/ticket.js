@@ -1,7 +1,6 @@
 // src/ticket.js
-require('dotenv').config()
-const fs = require('fs')
-const http = require('http')
+require('dotenv').config();
+const fs = require('fs');
 const {
   Client,
   GatewayIntentBits,
@@ -14,309 +13,438 @@ const {
   TextInputBuilder,
   TextInputStyle,
   PermissionFlagsBits,
-  AttachmentBuilder
-} = require('discord.js')
+  AttachmentBuilder,
+  StringSelectMenuBuilder,
+  ChannelType,
+  MessageFlags,
+} = require('discord.js');
 
-const TICKET_CHANNEL_ID     = '1399127054246477824'
-const TICKET_CATEGORY_ID    = '1399872666843873280'
-const INVITE_CHANNEL_ID     = '1398372783246934036'
-const INVITE_CATEGORY_ID    = TICKET_CATEGORY_ID
-const STAFF_ROLE_ID         = '1399128110774878319'
-const TRANSCRIPT_CHANNEL_ID = '1399878825235447848'
-const FORUM_CHANNEL_ID      = '1399843405328027879'
+// ===== IDs (update if needed) =====
+const TICKET_CHANNEL_ID     = '1404163599454306376'; // "tickets" hub channel
+const TICKET_CATEGORY_ID    = '1399872666843873280';
+const STAFF_ROLE_ID         = '1399128110774878319';
+const TRANSCRIPT_CHANNEL_ID = '1399878825235447848';
+const FORUM_CHANNEL_ID      = '1399843405328027879';
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
-})
+    GatewayIntentBits.MessageContent,
+  ],
+});
 
+// ---------- Forum thread limiter ----------
 client.on('threadCreate', async thread => {
-  if (thread.parentId !== FORUM_CHANNEL_ID) return
+  if (thread.parentId !== FORUM_CHANNEL_ID) return;
 
-  const allThreads = thread.guild.channels.cache.filter(c =>
-    c.parentId === FORUM_CHANNEL_ID && c.isThread()
-  )
-  const userThreads = allThreads.filter(t => t.ownerId === thread.ownerId)
+  const allThreads = thread.guild.channels.cache.filter(
+    c => c.parentId === FORUM_CHANNEL_ID && c.isThread()
+  );
+  const userThreads = allThreads.filter(t => t.ownerId === thread.ownerId);
 
   if (userThreads.size > 1) {
-    await thread.delete().catch(() => null)
-    const member = await thread.guild.members.fetch(thread.ownerId).catch(() => null)
+    await thread.delete().catch(() => null);
+    const member = await thread.guild.members.fetch(thread.ownerId).catch(() => null);
     if (member) {
-      member.send(
-        '🚫 You may only have one active trade post at a time. ' +
-        'Please delete your existing thread before creating a new one.'
-      ).catch(() => null)
+      member
+        .send('🚫 You may only have one active trade post at a time. Please delete your existing thread before creating a new one.')
+        .catch(() => null);
     }
   }
-})
+});
 
-client.commands = new Collection()
-fs.readdirSync(__dirname + '/commands')
-  .filter(f => f.endsWith('.js'))
-  .forEach(file => {
-    const cmd = require(`./commands/${file}`)
-    client.commands.set(cmd.data.name, cmd)
-  })
+// ---------- Load slash commands from src/commands ----------
+client.commands = new Collection();
+const commandsDir = __dirname + '/commands';
+if (fs.existsSync(commandsDir)) {
+  fs.readdirSync(commandsDir)
+    .filter(f => f.endsWith('.js'))
+    .forEach(file => {
+      const cmd = require(`./commands/${file}`);
+      if (cmd?.data?.name) client.commands.set(cmd.data.name, cmd);
+    });
+}
 
+// ---------- On ready: ensure Ticket Hub with dropdown ----------
 client.once('ready', async () => {
-  console.log(`Logged in as ${client.user.tag}`)
+  console.log(`Logged in as ${client.user.tag}`);
 
-  // post middleman embed if missing
-  const ticketChannel = await client.channels.fetch(TICKET_CHANNEL_ID)
-  if (ticketChannel?.isTextBased()) {
-    const msgs = await ticketChannel.messages.fetch({ limit: 100 })
-    const hasMiddleman = msgs.some(msg => {
-      const emb = msg.embeds[0]
-      const btn = msg.components.find(r => r.components.find(c => c.customId === 'open_ticket'))
-      return emb?.title === 'Request a Middleman' && btn
-    })
-    if (!hasMiddleman) {
-      const embed = new EmbedBuilder()
-        .setTitle('Request a Middleman')
-        .setDescription('Tired of getting scammed? Keep every trade **SAFE** - request a Middleman!')
-        .addFields({ name: '❓ What\'s a middleman?', value: 'A trusted staff member who holds both items until trade completes.' })
-        .setColor('#5865F2')
-        .setFooter({ text: 'TicketTool.xyz - Ticketing without clutter' })
+  const hub = await client.channels.fetch(TICKET_CHANNEL_ID).catch(() => null);
+  if (!hub?.isTextBased()) return;
 
-      const button = new ButtonBuilder()
-        .setCustomId('open_ticket')
-        .setLabel('Request a Middleman')
-        .setStyle(ButtonStyle.Primary)
-        .setEmoji('🛡️')
+  const msgs = await hub.messages.fetch({ limit: 50 });
+  const hasHub = msgs.some(
+    m =>
+      m.embeds?.[0]?.title === 'Ticket Hub' &&
+      m.components?.[0]?.components?.[0]?.customId === 'ticket_select'
+  );
 
-      const row = new ActionRowBuilder().addComponents(button)
-      await ticketChannel.send({ embeds: [embed], components: [row] })
-    }
+  if (!hasHub) {
+    const hubEmbed = new EmbedBuilder()
+      .setTitle('Ticket Hub')
+      .setDescription(
+        `Need help, want to trade safely, or have a request?\n` +
+        `Select an option from the menu below to open a ticket.\n\n` +
+        `🛒 **Buy A Brainrot** – Purchase your dream brainrot.\n` +
+        `🛡️ **Request a Middleman** – Trade safely with staff assistance.\n` +
+        `🎁 **Invite Rewards** – Redeem your invites for prizes.\n` +
+        `🚨 **Scam Report** – Report suspicious activity or users.\n` +
+        `📋 **Apply For Roles** – Join our team or gain special ranks.\n` +
+        `❓ **Other** – Anything not listed above.`
+      )
+      .setColor('#5865F2');
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('ticket_select')
+      .setPlaceholder('Choose a ticket type…')
+      .addOptions(
+        { label: 'Buy A Brainrot',      value: 'buy',  description: 'Request to purchase a brainrot',        emoji: '🛒' },
+        { label: 'Request a Middleman', value: 'mm',   description: 'Use a trusted middleman for your trade', emoji: '🛡️' },
+        { label: 'Invite Rewards',      value: 'inv',  description: 'Redeem your invites for a brainrot',     emoji: '🎁' },
+        { label: 'Scam Report',         value: 'scam', description: 'Report a scammer',                        emoji: '🚨' },
+        { label: 'Apply For Roles',     value: 'apply',description: 'Apply for a server role',                 emoji: '📋' },
+        { label: 'Other',               value: 'other',description: 'Anything else',                           emoji: '❓' },
+      );
+
+    await hub.send({
+      embeds: [hubEmbed],
+      components: [new ActionRowBuilder().addComponents(menu)],
+    });
   }
+});
 
-  // post invite rewards embed if missing
-  const inviteChannel = await client.channels.fetch(INVITE_CHANNEL_ID)
-  if (inviteChannel?.isTextBased()) {
-    const msgs = await inviteChannel.messages.fetch({ limit: 100 })
-    const hasInvite = msgs.some(msg => {
-      const emb = msg.embeds[0]
-      const btn = msg.components.find(r => r.components.find(c => c.customId === 'open_invite_ticket'))
-      return emb?.title === 'Invite Rewards Ticket' && btn
-    })
-    if (!hasInvite) {
-      const ivEmbed = new EmbedBuilder()
-        .setTitle('Invite Rewards Ticket')
-        .setDescription('Have enough invites for invite rewards? Create a ticket here to recieve your free brainrot.')
-        .setColor('#57F287')
+// ---------- Helpers ----------
+const makeInput = (id, label, style, required = true, placeholder = 'EXAMPLE') =>
+  new TextInputBuilder()
+    .setCustomId(id)
+    .setLabel(label)
+    .setStyle(style)
+    .setRequired(required)
+    .setPlaceholder(placeholder);
 
-      const ivButton = new ButtonBuilder()
-        .setCustomId('open_invite_ticket')
-        .setLabel('Create Invite Ticket')
-        .setStyle(ButtonStyle.Success)
+const makeCloseRow = () =>
+  new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('close_ticket')
+      .setLabel('Close Ticket')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔒')
+  );
 
-      const ivRow = new ActionRowBuilder().addComponents(ivButton)
-      await inviteChannel.send({ embeds: [ivEmbed], components: [ivRow] })
-    }
-  }
-})
+const makeOverwrites = (guild, userId) => [
+  { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+  { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+  { id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+];
 
+const createTicketChannel = async (interaction, kind, user) => {
+  return interaction.guild.channels.create({
+    name: `${kind}-${user.username}`.toLowerCase().replace(/[^a-z0-9\-]/g, ''),
+    type: ChannelType.GuildText,
+    parent: TICKET_CATEGORY_ID,
+    permissionOverwrites: makeOverwrites(interaction.guild, user.id),
+  });
+};
+
+// ---------- Interactions ----------
 client.on('interactionCreate', async interaction => {
+  // Slash commands
   if (interaction.isChatInputCommand()) {
-    const cmd = client.commands.get(interaction.commandName)
+    const cmd = client.commands.get(interaction.commandName);
     if (cmd) {
       try {
-        await cmd.execute(interaction)
+        await cmd.execute(interaction);
       } catch (err) {
-        console.error(err)
+        console.error(err);
         if (!interaction.replied) {
-          await interaction.reply({ content: 'There was an error.', ephemeral: true })
+          await interaction.reply({ content: 'There was an error.', flags: MessageFlags.Ephemeral });
         }
       }
     }
-    return
+    return;
   }
 
-  // open middleman modal
-  if (interaction.isButton() && interaction.customId === 'open_ticket') {
-    const modal = new ModalBuilder()
-      .setCustomId('ticket_modal')
-      .setTitle('Ticket Request')
+  // Dropdown -> show modal
+  if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select') {
+    const choice = interaction.values[0];
+    let modal;
 
-    const q1 = new TextInputBuilder()
-      .setCustomId('q1')
-      .setLabel('Who are you trading with?')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
+    switch (choice) {
+      case 'buy': {
+        modal = new ModalBuilder().setCustomId('modal_buy').setTitle('Buy A Brainrot');
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            makeInput('wanted', 'What brainrot are you looking to purchase?', TextInputStyle.Short, true, 'e.g. Tralalero Tralala')
+          )
+        );
+        break;
+      }
 
-    const q2 = new TextInputBuilder()
-      .setCustomId('q2')
-      .setLabel('What is the trade?')
-      .setStyle(TextInputStyle.Paragraph)
-      .setRequired(true)
+      case 'mm': {
+        modal = new ModalBuilder().setCustomId('modal_mm').setTitle('Request a Middleman');
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            makeInput('q1', 'Who are you trading with?', TextInputStyle.Short, true, 'e.g. @DiscordUser or RobloxName')
+          ),
+          new ActionRowBuilder().addComponents(
+            makeInput('q2', 'What is the trade?', TextInputStyle.Paragraph, true, 'e.g. My Graipus for 2 Rainbow Tralalero Tralala')
+          ),
+          new ActionRowBuilder().addComponents(
+            makeInput('q3', 'Can you both join links? (Yes/No)', TextInputStyle.Short, true, 'e.g. Yes')
+          ),
+          new ActionRowBuilder().addComponents(
+            makeInput('q4', 'If not, list both Roblox users', TextInputStyle.Short, false, 'e.g. User1, User2')
+          )
+        );
+        break;
+      }
 
-    const q3 = new TextInputBuilder()
-      .setCustomId('q3')
-      .setLabel('Can you pay the middleman fee? (Yes/No)')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
+      case 'inv': {
+        modal = new ModalBuilder().setCustomId('modal_inv').setTitle('Invite Rewards');
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            makeInput('brainrot', 'What brainrot would you like?', TextInputStyle.Short, true, 'e.g. Tralalero Tralala')
+          ),
+          new ActionRowBuilder().addComponents(
+            makeInput('invites', 'How many invites do you have?', TextInputStyle.Short, true, 'e.g. 5')
+          )
+        );
+        break;
+      }
 
-    const q4 = new TextInputBuilder()
-      .setCustomId('q4')
-      .setLabel('Can you join private servers? (Yes/No)')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
+      case 'scam': {
+        modal = new ModalBuilder().setCustomId('modal_scam').setTitle('Scam Report');
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            makeInput('scammer', 'Scammer Discord/Roblox user', TextInputStyle.Short, true, 'e.g. @DiscordUser or RobloxName')
+          ),
+          new ActionRowBuilder().addComponents(
+            makeInput('proof', 'Do you have proof? (Yes/No)', TextInputStyle.Paragraph, true, 'e.g. Yes')
+          )
+        );
+        break;
+      }
 
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(q1),
-      new ActionRowBuilder().addComponents(q2),
-      new ActionRowBuilder().addComponents(q3),
-      new ActionRowBuilder().addComponents(q4)
-    )
+      case 'apply': {
+        modal = new ModalBuilder().setCustomId('modal_apply').setTitle('Apply For Roles');
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            makeInput('role', 'What role are you applying for?', TextInputStyle.Short, true, 'e.g. Content Creator')
+          )
+        );
+        break;
+      }
 
-    await interaction.showModal(modal)
-    return
+      case 'other': {
+        modal = new ModalBuilder().setCustomId('modal_other').setTitle('Other Ticket');
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            makeInput('reason', 'Reason for your ticket', TextInputStyle.Paragraph, true, 'e.g. I have a question about …')
+          )
+        );
+        break;
+      }
+    }
+
+    if (modal) await interaction.showModal(modal);
+    return;
   }
 
-  // open invite modal
-  if (interaction.isButton() && interaction.customId === 'open_invite_ticket') {
-    const modal = new ModalBuilder()
-      .setCustomId('invite_modal')
-      .setTitle('Invite Tracker')
+  // ===== Modal submits -> create channels =====
 
-    const invInput = new TextInputBuilder()
-      .setCustomId('inviteCode')
-      .setLabel('How many invites do you have?')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
+  // Buy
+  if (interaction.isModalSubmit() && interaction.customId === 'modal_buy') {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const user = interaction.user;
+    const wanted = interaction.fields.getTextInputValue('wanted');
 
-    modal.addComponents(new ActionRowBuilder().addComponents(invInput))
-    await interaction.showModal(modal)
-    return
+    let ch;
+    try {
+      ch = await createTicketChannel(interaction, 'ticket-buy', user);
+    } catch (e) {
+      console.error('Create ticket-buy failed:', e);
+      return interaction.followUp({ content: '❌ Failed to create ticket channel.', flags: MessageFlags.Ephemeral });
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(`Buy A Brainrot — ${user.tag}`)
+      .setColor('#EB459E')
+      .addFields({ name: 'Looking to purchase', value: wanted })
+      .setTimestamp();
+
+    await ch.send({ content: `<@${user.id}> opened a purchase ticket`, embeds: [embed], components: [makeCloseRow()] });
+    await interaction.followUp({ content: `✅ Your purchase ticket: ${ch}`, flags: MessageFlags.Ephemeral });
+    return;
   }
 
-  // handle middleman submit
-  if (interaction.isModalSubmit() && interaction.customId === 'ticket_modal') {
-    await interaction.deferReply({ ephemeral: true })
-    const user = interaction.user
+  // Middleman
+  if (interaction.isModalSubmit() && interaction.customId === 'modal_mm') {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const user = interaction.user;
     const answers = {
       tradingWith: interaction.fields.getTextInputValue('q1'),
       tradeWhat:   interaction.fields.getTextInputValue('q2'),
-      fee:         interaction.fields.getTextInputValue('q3'),
-      joinServer:  interaction.fields.getTextInputValue('q4')
-    }
+      joinLinks:   interaction.fields.getTextInputValue('q3'),
+      robloxUsers: interaction.fields.getTextInputValue('q4') || '—',
+    };
 
-    let ticketChannel
+    let ch;
     try {
-      ticketChannel = await interaction.guild.channels.create({
-        name: `ticket-${user.username}`.toLowerCase(),
-        type: 0,
-        parent: TICKET_CATEGORY_ID,
-        permissionOverwrites: [
-          { id: interaction.guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
-          { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
-          { id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
-        ]
-      })
-    } catch (err) {
-      console.error('Error creating ticket channel:', err)
-      return interaction.followUp({ content: '❌ Failed to create ticket channel.', ephemeral: true })
+      ch = await createTicketChannel(interaction, 'ticket-mm', user);
+    } catch (e) {
+      console.error('Create ticket-mm failed:', e);
+      return interaction.followUp({ content: '❌ Failed to create ticket channel.', flags: MessageFlags.Ephemeral });
     }
 
-    const ticketEmbed = new EmbedBuilder()
-      .setTitle(`Ticket for ${user.tag}`)
+    const embed = new EmbedBuilder()
+      .setTitle(`Middleman Ticket — ${user.tag}`)
       .setThumbnail(user.displayAvatarURL())
       .setColor('#5865F2')
       .addFields(
-        { name: 'Trading with',       value: answers.tradingWith },
-        { name: 'What is the trade?', value: answers.tradeWhat },
-        { name: 'Pay middleman fee?', value: answers.fee },
-        { name: 'Join private server?', value: answers.joinServer }
+        { name: 'Who Are You Trading With?', value: answers.tradingWith },
+        { name: 'What Is The Trade?',        value: answers.tradeWhat },
+        { name: 'Can You Join Links?',       value: answers.joinLinks },
+        { name: 'Roblox Users (if cannot join links)', value: answers.robloxUsers },
       )
-      .setTimestamp()
+      .setTimestamp();
 
-    const closeBtn = new ButtonBuilder()
-      .setCustomId('close_ticket')
-      .setLabel('Close Ticket')
-      .setStyle(ButtonStyle.Danger)
-      .setEmoji('🔒')
-
-    await ticketChannel.send({
-      content: `<@${user.id}> opened a ticket`,
-      embeds: [ticketEmbed],
-      components: [new ActionRowBuilder().addComponents(closeBtn)]
-    })
-    await interaction.followUp({ content: `✅ Your ticket has been created: ${ticketChannel}`, ephemeral: true })
-    return
+    await ch.send({ content: `<@${user.id}> opened a ticket`, embeds: [embed], components: [makeCloseRow()] });
+    await interaction.followUp({ content: `✅ Your ticket has been created: ${ch}`, flags: MessageFlags.Ephemeral });
+    return;
   }
 
-  // handle invite submit
-  if (interaction.isModalSubmit() && interaction.customId === 'invite_modal') {
-    await interaction.deferReply({ ephemeral: true })
-    const user = interaction.user
-    const code = interaction.fields.getTextInputValue('inviteCode')
+  // Invite
+  if (interaction.isModalSubmit() && interaction.customId === 'modal_inv') {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const user = interaction.user;
+    const brainrot = interaction.fields.getTextInputValue('brainrot');
+    const invites  = interaction.fields.getTextInputValue('invites');
 
-    let inviteChan
+    let ch;
     try {
-      inviteChan = await interaction.guild.channels.create({
-        name: `invite-${user.username}`.toLowerCase(),
-        type: 0,
-        parent: INVITE_CATEGORY_ID,
-        permissionOverwrites: [
-          { id: interaction.guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
-          { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
-          { id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
-        ]
-      })
-    } catch (err) {
-      console.error('Error creating invite ticket channel:', err)
-      return interaction.followUp({ content: '❌ Failed to create invite ticket channel.', ephemeral: true })
+      ch = await createTicketChannel(interaction, 'ticket-invite', user);
+    } catch (e) {
+      console.error('Create ticket-invite failed:', e);
+      return interaction.followUp({ content: '❌ Failed to create ticket channel.', flags: MessageFlags.Ephemeral });
     }
 
-    const invEmbed = new EmbedBuilder()
-      .setTitle(`Invite Ticket for ${user.tag}`)
-      .addFields({ name: 'Invite Code', value: code })
+    const embed = new EmbedBuilder()
+      .setTitle(`Invite Rewards — ${user.tag}`)
       .setColor('#57F287')
-      .setTimestamp()
+      .addFields(
+        { name: 'Requested brainrot', value: brainrot },
+        { name: 'Invites claimed',    value: invites },
+      )
+      .setTimestamp();
 
-    const closeBtnInvite = new ButtonBuilder()
-      .setCustomId('close_ticket')
-      .setLabel('Close Ticket')
-      .setStyle(ButtonStyle.Danger)
-      .setEmoji('🔒')
-
-    await inviteChan.send({
-      content: `<@${user.id}> opened an invite ticket`,
-      embeds: [invEmbed],
-      components: [new ActionRowBuilder().addComponents(closeBtnInvite)]
-    })
-    await interaction.followUp({ content: `✅ Your invite ticket: ${inviteChan}`, ephemeral: true })
-    return
+    await ch.send({ content: `<@${user.id}> opened an invite ticket`, embeds: [embed], components: [makeCloseRow()] });
+    await interaction.followUp({ content: `✅ Your invite ticket: ${ch}`, flags: MessageFlags.Ephemeral });
+    return;
   }
 
-  // close ticket + transcript
+  // Scam
+  if (interaction.isModalSubmit() && interaction.customId === 'modal_scam') {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const user = interaction.user;
+    const scammer = interaction.fields.getTextInputValue('scammer');
+    const proof   = interaction.fields.getTextInputValue('proof');
+
+    let ch;
+    try {
+      ch = await createTicketChannel(interaction, 'ticket-scam', user);
+    } catch (e) {
+      console.error('Create ticket-scam failed:', e);
+      return interaction.followUp({ content: '❌ Failed to create ticket channel.', flags: MessageFlags.Ephemeral });
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(`Scam Report — ${user.tag}`)
+      .setColor('#ED4245')
+      .addFields(
+        { name: 'Scammer', value: scammer },
+        { name: 'Proof',   value: proof },
+      )
+      .setTimestamp();
+
+    await ch.send({ content: `<@${user.id}> opened a scam report`, embeds: [embed], components: [makeCloseRow()] });
+    await interaction.followUp({ content: `✅ Your scam report: ${ch}`, flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  // Apply
+  if (interaction.isModalSubmit() && interaction.customId === 'modal_apply') {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const user = interaction.user;
+    const role = interaction.fields.getTextInputValue('role');
+
+    let ch;
+    try {
+      ch = await createTicketChannel(interaction, 'ticket-apply', user);
+    } catch (e) {
+      console.error('Create ticket-apply failed:', e);
+      return interaction.followUp({ content: '❌ Failed to create ticket channel.', flags: MessageFlags.Ephemeral });
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(`Role Application — ${user.tag}`)
+      .setColor('#FEE75C')
+      .addFields({ name: 'Requested role', value: role })
+      .setTimestamp();
+
+    await ch.send({ content: `<@${user.id}> opened a role application`, embeds: [embed], components: [makeCloseRow()] });
+    await interaction.followUp({ content: `✅ Your application ticket: ${ch}`, flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  // Other
+  if (interaction.isModalSubmit() && interaction.customId === 'modal_other') {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const user = interaction.user;
+    const reason = interaction.fields.getTextInputValue('reason');
+
+    let ch;
+    try {
+      ch = await createTicketChannel(interaction, 'ticket-other', user);
+    } catch (e) {
+      console.error('Create ticket-other failed:', e);
+      return interaction.followUp({ content: '❌ Failed to create ticket channel.', flags: MessageFlags.Ephemeral });
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(`Other Ticket — ${user.tag}`)
+      .setColor('#99AAB5')
+      .addFields({ name: 'Reason', value: reason })
+      .setTimestamp();
+
+    await ch.send({ content: `<@${user.id}> opened a ticket`, embeds: [embed], components: [makeCloseRow()] });
+    await interaction.followUp({ content: `✅ Your ticket: ${ch}`, flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  // Close + transcript
   if (interaction.isButton() && interaction.customId === 'close_ticket') {
-    const channel = interaction.channel
-    const messages = await channel.messages.fetch({ limit: 100 })
+    const channel = interaction.channel;
+    const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+    if (!messages) return;
+
     const transcript = messages
       .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-      .map(m => `[${new Date(m.createdTimestamp).toLocaleString()}] ${m.author.tag}: ${m.content}`)
-      .join('\n')
+      .map(m => `[${new Date(m.createdTimestamp).toLocaleString()}] ${m.author?.tag ?? m.author?.id}: ${m.content}`)
+      .join('\n');
 
-    const transcriptChannel = await channel.guild.channels.fetch(TRANSCRIPT_CHANNEL_ID)
+    const transcriptChannel = await channel.guild.channels.fetch(TRANSCRIPT_CHANNEL_ID).catch(() => null);
     const attachment = new AttachmentBuilder(Buffer.from(transcript, 'utf-8'), {
-      name: `${channel.name}-transcript.txt`
-    })
+      name: `${channel.name}-transcript.txt`,
+    });
+
     if (transcriptChannel?.isTextBased()) {
-      await transcriptChannel.send({ content: `Transcript for ${channel.name}:`, files: [attachment] })
+      await transcriptChannel.send({ content: `Transcript for ${channel.name}:`, files: [attachment] });
     }
 
-    await channel.delete()
+    await channel.delete().catch(() => null);
   }
-})
+});
 
-client.login(process.env.DISCORD_TOKEN)
-
-// keep-alive HTTP server
-const port = process.env.PORT || 3000
-http
-  .createServer((req, res) => res.end('OK'))
-  .listen(port, () => console.log(`keep-alive ping listening on ${port}`))
+client.login(process.env.DISCORD_TOKEN);
